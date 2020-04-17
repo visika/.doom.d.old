@@ -57,7 +57,33 @@
 (setq org-roam-graph-extra-config '(("overlap" . "false")))
 (use-package org-roam
 	      :custom-face
-	      (org-roam-link ((t (:inherit org-link :foreground "dark orange")))))
+	      (org-roam-link ((t (:inherit org-link :foreground "dark orange"))))
+        :config
+        (require 'org-roam-protocol)
+        (setq org-roam-capture-templates
+              '(("d" "default" plain (function org-roam--capture-get-point)
+                 "%?"
+                 :file-name "${slug}"
+                 :head "#+SETUPFILE:./hugo_setup.org
+#+HUGO_SECTION: appunti
+#+HUGO_SLUG: ${slug}
+#+TITLE: ${title}\n"
+                 :unnarrowed t)
+                ("p" "private" plain (function org-roam-capture--get-point)
+                 "%?"
+                 :file-name "private-${slug}"
+                 :head "#+TITLE: ${title}\n"
+                 :unnarrowed t)))
+        (setq org-roam-ref-capture-templates
+              '(("r" "ref" plain (function org-roam-capture--get-point)
+                 "%?"
+                 :file-name "websites/${slug}"
+                 :head "#+SETUPFILE:./hugo_setup.org
+#+ROAM_KEY: ${ref}
+#+HUGO_SLUG: ${slug}
+#+TITLE: ${title}
+- source :: ${ref}"
+                 :unnarrowed t))))
 
 ;; configure org-roam-protocol
 
@@ -68,24 +94,33 @@
 (require 'org-roam-protocol)
 
 (after! (org org-roam)
-  (defun my/org-roam--backlinks-list (file)
-    (if (org-roam--org-roam-file-p file)
-        (--reduce-from
-         (concat acc (format "- [[file:%s][%s]]\n"
-                             (file-relative-name (car it) org-roam-directory)
-                             (org-roam--get-title-or-slug (car it))))
-         "" (org-roam-sql [:select [from] :from links :where (= to $s1) :and (= from $s2)] file "roam"))
-      ""))
+(defun my/org-roam--backlinks-list-with-content (file)
+  (with-temp-buffer
+    (if-let* ((backlinks (org-roam--get-backlinks file))
+              (grouped-backlinks (--group-by (nth 0 it) backlinks)))
+        (progn
+          (insert (format "\n\n* %d Backlinks\n"
+                          (length backlinks)))
+          (dolist (group grouped-backlinks)
+            (let ((file-from (car group))
+                  (bls (cdr group)))
+              (insert (format "** [[file:%s][%s]]\n"
+                              file-from
+                              (org-roam--get-title-or-slug file-from)))
+              (dolist (backlink bls)
+                (pcase-let ((`(,file-from _ ,props) backlink))
+                  (insert (s-trim (s-replace "\n" " " (plist-get props :content))))
+                  (insert "\n\n")))))))
+    (buffer-string)))
 
   (defun my/org-export-preprocessor (backend)
-    (let ((links (my/org-roam--backlinks-list (buffer-file-name))))
+    (let ((links (my/org-roam--backlinks-list-with-content (buffer-file-name))))
       (unless (string= links "")
         (save-excursion
           (goto-char (point-max))
           (insert (concat "\n* Backlinks\n") links)))))
 
   (add-hook 'org-export-before-processing-hook 'my/org-export-preprocessor))
-
 (require 'org-ref)
 ;; see org-ref for use of these variables
 (setq reftex-default-bibliography '("~/Documenti/bibliography/references.bib")
@@ -139,3 +174,33 @@
 ;; (setq org-journal-date-format #'org-journal-date-format-func)
 
 (defalias 'rekt 'rectangle-mark-mode)
+
+;; (after! (discord-emacs)
+;;   (discord-emacs-run "384815451978334208"))
+(require 'elcord)
+(elcord-mode)
+
+;; enable auto-export on saving for selected files
+(after! (org ox-hugo)
+  (defun jethro/conditional-hugo-enable ()
+    (save-excursion
+      (if (cdr (assoc "SETUPFILE" (org-roam--extract-global-props '("SETUPFILE"))))
+          (org-hugo-auto-export-mode +1)
+        (org-hugo-auto-export-mode -1))))
+  (add-hook 'org-mode-hook #'jethro/conditional-hugo-enable))
+
+(after! (org org-ref ox-hugo)
+  (use-package org-ref-ox-hugo
+    :config
+    (add-to-list 'org-ref-formatted-citation-formats
+                 '("md"
+                   ("article" . "${author}, *${title}*, ${journal}, *${volume}(${number})*, ${pages} (${year}). ${doi}")
+                   ("inproceedings" . "${author}, *${title}*, In ${editor}, ${booktitle} (pp. ${pages}) (${year}). ${address}: ${publisher}.")
+                   ("book" . "${author}, *${title}* (${year}), ${address}: ${publisher}.")
+                   ("phdthesis" . "${author}, *${title}* (Doctoral dissertation) (${year}). ${school}, ${address}.")
+                   ("inbook" . "${author}, *${title}*, In ${editor} (Eds.), ${booktitle} (pp. ${pages}) (${year}). ${address}: ${publisher}.")
+                   ("incollection" . "${author}, *${title}*, In ${editor} (Eds.), ${booktitle} (pp. ${pages}) (${year}). ${address}: ${publisher}.")
+                   ("proceedings" . "${editor} (Eds.), _${booktitle}_ (${year}). ${address}: ${publisher}.")
+                   ("unpublished" . "${author}, *${title}* (${year}). Unpublished manuscript.")
+                   ("misc" . "${author} (${year}). *${title}*. Retrieved from [${howpublished}](${howpublished}). ${note}.")
+                   (nil . "${author}, *${title}* (${year}).")))))
